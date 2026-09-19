@@ -1,0 +1,7 @@
+# GitHub Pages Configuration
+title: 3D Chess
+description: An interactive 3D chess game with customizable board views, smooth piece animations, valid move indicators, and AI or pass-and-play modes.
+baseurl: ""
+url: ""
+markdown: kramdown
+plugins: []

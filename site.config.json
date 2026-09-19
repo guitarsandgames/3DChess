@@ -1,0 +1,13 @@
+{
+  "name": "3D Chess",
+  "shortName": "Chess3D",
+  "description": "An interactive 3D chess game with customizable board views, smooth piece animations, valid move indicators, and AI or pass-and-play modes.",
+  "version": "1.0.0",
+  "base": "./",
+  "author": "Lydia Goyal",
+  "deployment": {
+    "provider": "github-pages",
+    "workflow": ".github/workflows/deploy.yml",
+    "outputDir": "dist"
+  }
+}
