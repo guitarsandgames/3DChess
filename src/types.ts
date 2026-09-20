@@ -1,6 +1,6 @@
 import { Square, PieceSymbol, Color } from 'chess.js';
 
-export type GameMode = 'ai' | 'pass-and-play';
+export type GameMode = 'ai' | 'pass-and-play' | 'multiplayer';
 export type AIDifficulty =
   | 'novice'
   | 'casual'
@@ -11,6 +11,53 @@ export type AIDifficulty =
   | 'easy'
   | 'medium'
   | 'hard';
+
+export type MultiplayerRole = 'host' | 'guest' | null;
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+export interface MultiplayerRoomState {
+  roomId: string | null;
+  role: MultiplayerRole;
+  myColor: PlayerColor;
+  opponentConnected: boolean;
+  status: ConnectionStatus;
+  errorMessage: string | null;
+  pingMs: number | null;
+}
+
+export type MultiplayerMessageType =
+  | 'INIT_GAME'
+  | 'MOVE'
+  | 'SYNC_CLOCK'
+  | 'RESIGN'
+  | 'OFFER_DRAW'
+  | 'ACCEPT_DRAW'
+  | 'DECLINE_DRAW'
+  | 'RESTART_REQUEST'
+  | 'RESTART_ACCEPT'
+  | 'CHAT'
+  | 'PING'
+  | 'PONG';
+
+export interface MultiplayerMessage {
+  type: MultiplayerMessageType;
+  payload?: any;
+  timestamp: number;
+}
+
+export interface InitGamePayload {
+  fen: string;
+  timeControl: number;
+  hostColor: PlayerColor;
+  guestColor: PlayerColor;
+}
+
+export interface MovePayload {
+  from: Square;
+  to: Square;
+  promotion?: PieceSymbol;
+  san: string;
+}
 
 export interface AIOpponent {
   id: AIDifficulty;

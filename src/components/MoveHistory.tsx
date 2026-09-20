@@ -1,9 +1,21 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { Chess, PieceSymbol } from 'chess.js';
 import { MoveRecord, CapturedPieces, ClockState, AIDifficulty } from '../types';
-import { RotateCcw, ShieldAlert, Cpu, Terminal, Sparkles, Bot, Shield, Swords, Brain, Crown, ChevronDown } from 'lucide-react';
+import { RotateCcw, ShieldAlert, Cpu, Terminal, Sparkles, Bot, Shield, Swords, Brain, Crown, ChevronDown, Users, Flag, Handshake, Wifi } from 'lucide-react';
 import { soundManager } from '../utils/audio';
 import { AI_OPPONENTS, getAIOpponent } from '../utils/aiBot';
+import { PlayerColor } from '../types';
+
+interface MultiplayerInfo {
+  role: 'host' | 'guest' | null;
+  myColor: PlayerColor;
+  opponentConnected: boolean;
+  onResign: () => void;
+  onOfferDraw: () => void;
+  drawOffered: boolean;
+  onAcceptDraw: () => void;
+  onDeclineDraw: () => void;
+}
 
 interface MoveHistoryProps {
   game: Chess;
@@ -16,6 +28,7 @@ interface MoveHistoryProps {
   gameMode: string;
   aiDifficulty: AIDifficulty;
   onSetAIDifficulty?: (diff: AIDifficulty) => void;
+  multiplayerProps?: MultiplayerInfo;
 }
 
 const PIECE_VALUES: Record<PieceSymbol, number> = {
@@ -62,6 +75,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
   gameMode,
   aiDifficulty,
   onSetAIDifficulty,
+  multiplayerProps,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showLevelPicker, setShowLevelPicker] = useState(false);
@@ -168,6 +182,81 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
                   </button>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Multiplayer Opponent Card (when in Multiplayer Mode) */}
+      {gameMode === 'multiplayer' && multiplayerProps && (
+        <div className="p-3.5 border-b border-neutral-800 bg-neutral-900/90">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                <Users className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-display font-black text-xs uppercase tracking-wider text-neutral-100">
+                    Online Opponent
+                  </span>
+                  <span className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded-sm border ${
+                    multiplayerProps.opponentConnected
+                      ? 'bg-emerald-950/60 border-emerald-700 text-emerald-400'
+                      : 'bg-amber-950/60 border-amber-700 text-amber-400 animate-pulse'
+                  }`}>
+                    {multiplayerProps.opponentConnected ? 'CONNECTED' : 'WAITING'}
+                  </span>
+                </div>
+                <div className="text-[10px] font-mono text-neutral-400">
+                  You are {multiplayerProps.myColor === 'w' ? 'White (moves first)' : 'Black'}
+                </div>
+              </div>
+            </div>
+
+            {/* In-Game Actions: Resign / Draw */}
+            {multiplayerProps.opponentConnected && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  id="multiplayer-draw-btn"
+                  onClick={multiplayerProps.onOfferDraw}
+                  title="Offer Draw"
+                  className="p-1.5 rounded-md bg-neutral-950 hover:bg-neutral-800 text-neutral-400 hover:text-amber-300 border border-neutral-800 transition cursor-pointer text-xs"
+                >
+                  <Handshake className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  id="multiplayer-resign-btn"
+                  onClick={multiplayerProps.onResign}
+                  title="Resign Game"
+                  className="p-1.5 rounded-md bg-neutral-950 hover:bg-neutral-800 text-neutral-400 hover:text-rose-400 border border-neutral-800 transition cursor-pointer text-xs"
+                >
+                  <Flag className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Draw Offer Notification Banner */}
+          {multiplayerProps.drawOffered && (
+            <div className="mt-2.5 p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-between">
+              <span className="text-[11px] text-amber-300 font-medium">Opponent offers a draw!</span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  id="accept-draw-btn"
+                  onClick={multiplayerProps.onAcceptDraw}
+                  className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold"
+                >
+                  Accept
+                </button>
+                <button
+                  id="decline-draw-btn"
+                  onClick={multiplayerProps.onDeclineDraw}
+                  className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[10px]"
+                >
+                  Decline
+                </button>
+              </div>
             </div>
           )}
         </div>

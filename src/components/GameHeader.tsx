@@ -7,6 +7,8 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
+  Users,
+  Wifi,
 } from 'lucide-react';
 import { soundManager } from '../utils/audio';
 
@@ -14,21 +16,31 @@ interface GameHeaderProps {
   onNewGame: () => void;
   onOpenSettings: () => void;
   onOpenRules: () => void;
+  onOpenMultiplayer: () => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
   showSidebar: boolean;
   onToggleSidebar: () => void;
   gameMode: string;
+  multiplayerStatus?: {
+    inRoom: boolean;
+    code?: string | null;
+    connected: boolean;
+    ping?: number | null;
+  };
 }
 
 export const GameHeader: React.FC<GameHeaderProps> = ({
   onNewGame,
   onOpenSettings,
   onOpenRules,
+  onOpenMultiplayer,
   soundEnabled,
   onToggleSound,
   showSidebar,
   onToggleSidebar,
+  gameMode,
+  multiplayerStatus,
 }) => {
   return (
     <header className="h-14 px-4 sm:px-6 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur-md flex items-center justify-between z-30 select-none">
@@ -44,11 +56,39 @@ export const GameHeader: React.FC<GameHeaderProps> = ({
           <span className="text-[10px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
             3D ENGINE
           </span>
+          {multiplayerStatus?.inRoom && (
+            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-xs font-mono">
+              <span className={`w-2 h-2 rounded-full ${multiplayerStatus.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400 animate-ping'}`} />
+              <span>Room: {multiplayerStatus.code}</span>
+              {multiplayerStatus.ping !== null && multiplayerStatus.ping !== undefined && (
+                <span className="text-[10px] text-neutral-400">({multiplayerStatus.ping}ms)</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
       {/* Action Buttons */}
       <div className="flex items-center gap-2">
+        {/* Play Online / Multiplayer Trigger */}
+        <button
+          id="header-multiplayer-btn"
+          onClick={() => {
+            soundManager.playSelect();
+            onOpenMultiplayer();
+          }}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${
+            gameMode === 'multiplayer'
+              ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300 shadow-sm'
+              : 'bg-neutral-900 border-neutral-800 text-neutral-300 hover:text-white hover:bg-neutral-800'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">
+            {multiplayerStatus?.inRoom ? 'Room Info' : 'Play Online'}
+          </span>
+        </button>
+
         <button
           id="header-new-game-btn"
           onClick={() => {

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Square } from 'chess.js';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Square, PieceSymbol } from 'chess.js';
 import { Chess3DCanvas } from './components/Chess3DCanvas';
 import { GameHeader } from './components/GameHeader';
 import { GameControls } from './components/GameControls';
@@ -13,14 +13,17 @@ import { PromotionModal } from './components/PromotionModal';
 import { GameOverModal } from './components/GameOverModal';
 import { SettingsModal } from './components/SettingsModal';
 import { RulesModal } from './components/RulesModal';
+import { MultiplayerModal } from './components/MultiplayerModal';
 import {
   GameMode,
   AIDifficulty,
   PlayerColor,
   CameraPreset,
+  MoveRecord,
 } from './types';
 import { useChessGame } from './hooks/useChessGame';
 import { useChessClock } from './hooks/useChessClock';
+import { useMultiplayer } from './hooks/useMultiplayer';
 import { getBestMove, clearTranspositionTable } from './utils/aiBot';
 import { soundManager } from './utils/audio';
 
@@ -40,6 +43,12 @@ export default function App() {
   // UI Modals State
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isRulesOpen, setIsRulesOpen] = useState<boolean>(false);
+  const [isMultiplayerOpen, setIsMultiplayerOpen] = useState<boolean>(false);
+  const [initialRoomCode, setInitialRoomCode] = useState<string>('');
+
+  // Keep references for callbacks
+  const gameModeRef = useRef(gameMode);
+  gameModeRef.current = gameMode;
 
   // Sync sound settings with soundManager singleton
   useEffect(() => {
@@ -49,9 +58,13 @@ export default function App() {
   // Modular Chess Game Hook
   const chessGame = useChessGame({
     soundEnabled,
-    onMoveExecuted: () => {
+    onMoveExecuted: (move: MoveRecord) => {
       if (timeControl > 0) {
         startClock();
+      }
+      // If we are in multiplayer mode and this was our move, transmit it to peer
+      if (gameModeRef.current === 'multiplayer' && move.color === multiplayer.roomState.myColor) {
+        multiplayer.sendMove(move.from, move.to, move.promotion, move.san);
       }
     },
   });
@@ -91,7 +104,48 @@ export default function App() {
     [chessGame, resetClock, timeControl, playerColor]
   );
 
-  // Autonomous AI Turn Scheduling
+  // Modular Peer-to-Peer Multiplayer Hook
+  const multiplayer = useMultiplayer({
+    onOpponentMove: (payload) => {
+      chessGame.executeMove(payload.from, payload.to, payload.promotion);
+    },
+    onGameInitialized: (payload) => {
+      setGameMode('multiplayer');
+      const myAssignedColor =
+        multiplayer.roomState.role === 'host' ? payload.hostColor : payload.guestColor;
+      multiplayer.setMyColor(myAssignedColor);
+      setPlayerColor(myAssignedColor);
+      setTimeControl(payload.timeControl);
+      setClockTimeControl(payload.timeControl);
+      handleResetGame('multiplayer', myAssignedColor, payload.timeControl);
+    },
+    onOpponentResigned: () => {
+      chessGame.setIsGameOver(true);
+      soundManager.playVictory();
+    },
+    onDrawOffered: () => {
+      soundManager.playSelect();
+    },
+    onDrawAccepted: () => {
+      chessGame.setIsGameOver(true);
+      soundManager.playVictory();
+    },
+    onRematchAccepted: () => {
+      handleResetGame('multiplayer', multiplayer.roomState.myColor, timeControl);
+    },
+  });
+
+  // URL query parameter room check: auto-open multiplayer join modal
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const roomParam = params.get('room');
+    if (roomParam) {
+      setInitialRoomCode(roomParam);
+      setIsMultiplayerOpen(true);
+    }
+  }, []);
+
+  // Autonomous AI Turn Scheduling (Only for 'ai' mode)
   useEffect(() => {
     if (gameMode !== 'ai' || chessGame.isGameOver || chessGame.pendingPromotion) return;
 
@@ -125,15 +179,23 @@ export default function App() {
   const handleSquareClick = (square: Square) => {
     if (chessGame.isGameOver || isThinking) return;
 
-    // Reject input when AI is thinking or it's AI's turn
+    // Turn & Player Color Locking
     if (gameMode === 'ai' && chessGame.turn !== playerColor) {
       return;
+    }
+
+    if (gameMode === 'multiplayer') {
+      if (!multiplayer.roomState.opponentConnected) return;
+      if (chessGame.turn !== multiplayer.roomState.myColor) return;
     }
 
     const clickedPiece = chessGame.chessInstance.get(square);
 
     // Case 1: Square has active player's piece -> Select / toggle selection
     if (clickedPiece && clickedPiece.color === chessGame.turn) {
+      if (gameMode === 'multiplayer' && clickedPiece.color !== multiplayer.roomState.myColor) {
+        return;
+      }
       chessGame.selectSquare(square);
       return;
     }
@@ -151,9 +213,23 @@ export default function App() {
 
   // Move Undo
   const handleUndo = () => {
-    if (chessGame.moveHistory.length === 0 || isThinking) return;
+    if (chessGame.moveHistory.length === 0 || isThinking || gameMode === 'multiplayer') return;
     const steps = gameMode === 'ai' && chessGame.moveHistory.length >= 2 ? 2 : 1;
     chessGame.undoMove(steps);
+  };
+
+  // Multiplayer Actions
+  const handleResign = () => {
+    if (gameMode === 'multiplayer') {
+      multiplayer.sendResign();
+      chessGame.setIsGameOver(true);
+    }
+  };
+
+  const handleOfferDraw = () => {
+    if (gameMode === 'multiplayer') {
+      multiplayer.sendDrawOffer();
+    }
   };
 
   return (
@@ -163,11 +239,18 @@ export default function App() {
         onNewGame={() => handleResetGame()}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenRules={() => setIsRulesOpen(true)}
+        onOpenMultiplayer={() => setIsMultiplayerOpen(true)}
         soundEnabled={soundEnabled}
         onToggleSound={() => setSoundEnabled((prev) => !prev)}
         showSidebar={showSidebar}
         onToggleSidebar={() => setShowSidebar((prev) => !prev)}
         gameMode={gameMode}
+        multiplayerStatus={{
+          inRoom: !!multiplayer.roomState.roomId,
+          code: multiplayer.roomState.roomId,
+          connected: multiplayer.roomState.opponentConnected,
+          ping: multiplayer.roomState.pingMs,
+        }}
       />
 
       {/* Main Viewport + Sidebar Layout */}
@@ -210,10 +293,27 @@ export default function App() {
             clock={clock}
             isThinking={isThinking}
             onUndo={handleUndo}
-            canUndo={chessGame.moveHistory.length > 0}
+            canUndo={chessGame.moveHistory.length > 0 && gameMode !== 'multiplayer'}
             gameMode={gameMode}
             aiDifficulty={aiDifficulty}
             onSetAIDifficulty={(diff) => setAIDifficulty(diff)}
+            multiplayerProps={
+              gameMode === 'multiplayer'
+                ? {
+                    role: multiplayer.roomState.role,
+                    myColor: multiplayer.roomState.myColor,
+                    opponentConnected: multiplayer.roomState.opponentConnected,
+                    onResign: handleResign,
+                    onOfferDraw: handleOfferDraw,
+                    drawOffered: multiplayer.drawOfferReceived,
+                    onAcceptDraw: () => {
+                      multiplayer.acceptDraw();
+                      chessGame.setIsGameOver(true);
+                    },
+                    onDeclineDraw: () => multiplayer.declineDraw(),
+                  }
+                : undefined
+            }
           />
         </div>
       </div>
@@ -233,7 +333,13 @@ export default function App() {
         isOpen={chessGame.isGameOver}
         winner={chessGame.winner}
         reason={chessGame.gameOverReason}
-        onNewGame={() => handleResetGame()}
+        onNewGame={() => {
+          if (gameMode === 'multiplayer') {
+            multiplayer.sendRematchRequest();
+          } else {
+            handleResetGame();
+          }
+        }}
         onClose={() => chessGame.setIsGameOver(false)}
         playerColor={playerColor}
         gameMode={gameMode}
@@ -245,7 +351,14 @@ export default function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         gameMode={gameMode}
-        onSetGameMode={(mode) => setGameMode(mode)}
+        onSetGameMode={(mode) => {
+          if (mode === 'multiplayer') {
+            setIsSettingsOpen(false);
+            setIsMultiplayerOpen(true);
+          } else {
+            setGameMode(mode);
+          }
+        }}
         aiDifficulty={aiDifficulty}
         onSetAIDifficulty={(diff) => setAIDifficulty(diff)}
         playerColor={playerColor}
@@ -260,6 +373,24 @@ export default function App() {
         soundEnabled={soundEnabled}
         onToggleSound={() => setSoundEnabled((prev) => !prev)}
         onApplyNewGame={() => handleResetGame(gameMode, playerColor, timeControl)}
+      />
+
+      {/* Multiplayer Room Creation & Join Modal */}
+      <MultiplayerModal
+        isOpen={isMultiplayerOpen}
+        onClose={() => setIsMultiplayerOpen(false)}
+        roomState={multiplayer.roomState}
+        onCreateRoom={(tc, prefColor) => {
+          multiplayer.createRoom(tc, prefColor);
+        }}
+        onJoinRoom={(code) => {
+          multiplayer.joinRoom(code);
+        }}
+        onLeaveRoom={() => {
+          multiplayer.leaveRoom();
+          handleResetGame('ai', 'w', 0);
+        }}
+        initialRoomCode={initialRoomCode}
       />
 
       {/* Rules & Help Modal */}

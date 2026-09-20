@@ -85,23 +85,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <label className="block text-[11px] font-mono font-bold text-neutral-400 uppercase tracking-widest mb-2.5">
                 GAME MODE
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <button
                   id="mode-ai-btn"
                   onClick={() => {
                     soundManager.playSelect();
                     onSetGameMode('ai');
                   }}
-                  className={`p-3 rounded-xl border flex items-center gap-3 transition cursor-pointer ${
+                  className={`p-3 rounded-xl border flex items-center gap-2.5 transition cursor-pointer ${
                     gameMode === 'ai'
                       ? 'bg-amber-400/10 border-amber-400/60 text-amber-300'
                       : 'bg-neutral-900/80 border-neutral-800 text-neutral-300 hover:bg-neutral-900'
                   }`}
                 >
-                  <Bot className="w-5 h-5" />
+                  <Bot className="w-5 h-5 shrink-0" />
                   <div className="text-left">
-                    <div className="font-display font-bold text-xs uppercase tracking-wide">VS COMPUTER AI</div>
-                    <div className="text-[11px] font-mono opacity-70">6 distinct AI difficulty tiers</div>
+                    <div className="font-display font-bold text-xs uppercase tracking-wide">VS AI</div>
+                    <div className="text-[10px] font-mono opacity-70">Computer bot</div>
                   </div>
                 </button>
 
@@ -111,16 +111,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     soundManager.playSelect();
                     onSetGameMode('pass-and-play');
                   }}
-                  className={`p-3 rounded-xl border flex items-center gap-3 transition cursor-pointer ${
+                  className={`p-3 rounded-xl border flex items-center gap-2.5 transition cursor-pointer ${
                     gameMode === 'pass-and-play'
                       ? 'bg-amber-400/10 border-amber-400/60 text-amber-300'
                       : 'bg-neutral-900/80 border-neutral-800 text-neutral-300 hover:bg-neutral-900'
                   }`}
                 >
-                  <Users className="w-5 h-5" />
+                  <Users className="w-5 h-5 shrink-0" />
                   <div className="text-left">
                     <div className="font-display font-bold text-xs uppercase tracking-wide">PASS & PLAY</div>
-                    <div className="text-[11px] font-mono opacity-70">2 players on one screen</div>
+                    <div className="text-[10px] font-mono opacity-70">Single screen</div>
+                  </div>
+                </button>
+
+                <button
+                  id="mode-multiplayer-btn"
+                  onClick={() => {
+                    soundManager.playSelect();
+                    onSetGameMode('multiplayer');
+                  }}
+                  className={`p-3 rounded-xl border flex items-center gap-2.5 transition cursor-pointer ${
+                    gameMode === 'multiplayer'
+                      ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300'
+                      : 'bg-neutral-900/80 border-neutral-800 text-neutral-300 hover:bg-neutral-900'
+                  }`}
+                >
+                  <Users className="w-5 h-5 shrink-0 text-indigo-400" />
+                  <div className="text-left">
+                    <div className="font-display font-bold text-xs uppercase tracking-wide">MULTIPLAYER</div>
+                    <div className="text-[10px] font-mono opacity-70">Online P2P link</div>
                   </div>
                 </button>
               </div>
