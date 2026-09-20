@@ -91,15 +91,80 @@ export const BOARD_THEMES: BoardTheme[] = [
   },
 ];
 
-// Helper to construct smooth lathe geometry from profile control points
+// Global geometry & material pools for maximum performance & WebGL memory efficiency
+const materialCache = new Map<string, THREE.Material>();
+const geometryCache = new Map<string, THREE.BufferGeometry>();
+
+export function clearPieceModelCache(): void {
+  materialCache.forEach((mat) => mat.dispose());
+  materialCache.clear();
+  geometryCache.forEach((geo) => geo.dispose());
+  geometryCache.clear();
+}
+
+// Deep hierarchy disposal utility to prevent WebGL VRAM leaks
+export function disposeHierarchy(obj: THREE.Object3D): void {
+  obj.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      if (child.geometry) {
+        let isShared = false;
+        for (const sharedGeo of geometryCache.values()) {
+          if (sharedGeo === child.geometry) {
+            isShared = true;
+            break;
+          }
+        }
+        if (!isShared) {
+          child.geometry.dispose();
+        }
+      }
+      if (child.material) {
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        mats.forEach((m) => {
+          let isShared = false;
+          for (const sharedMat of materialCache.values()) {
+            if (sharedMat === m) {
+              isShared = true;
+              break;
+            }
+          }
+          if (!isShared) {
+            m.dispose();
+          }
+        });
+      }
+    }
+  });
+}
+
+function getOrCreateGeometry<T extends THREE.BufferGeometry>(key: string, factory: () => T): T {
+  if (!geometryCache.has(key)) {
+    geometryCache.set(key, factory());
+  }
+  return geometryCache.get(key) as T;
+}
+
+function getOrCreateLatheGeometry(
+  key: string,
+  points: [number, number][],
+  segments = 36
+): THREE.LatheGeometry {
+  if (!geometryCache.has(key)) {
+    const v2Points = points.map(([r, y]) => new THREE.Vector2(Math.max(0, r), y));
+    const geo = new THREE.LatheGeometry(v2Points, segments);
+    geo.computeVertexNormals();
+    geometryCache.set(key, geo);
+  }
+  return geometryCache.get(key) as THREE.LatheGeometry;
+}
+
 function createLatheMesh(
+  key: string,
   points: [number, number][],
   material: THREE.Material,
   segments = 36
 ): THREE.Mesh {
-  const v2Points = points.map(([r, y]) => new THREE.Vector2(Math.max(0, r), y));
-  const geo = new THREE.LatheGeometry(v2Points, segments);
-  geo.computeVertexNormals();
+  const geo = getOrCreateLatheGeometry(key, points, segments);
   const mesh = new THREE.Mesh(geo, material);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
@@ -122,6 +187,42 @@ function getThemeAccentColor(theme: BoardTheme): number {
   }
 }
 
+function getMainMaterial(theme: BoardTheme, color: Color): THREE.MeshStandardMaterial {
+  const key = `main_${theme.id}_${color}`;
+  if (!materialCache.has(key)) {
+    const pieceColor = color === 'w' ? theme.lightPiece : theme.darkPiece;
+    const mat = new THREE.MeshStandardMaterial({
+      color: pieceColor,
+      roughness: theme.pieceRoughness,
+      metalness: theme.pieceMetalness,
+    });
+    materialCache.set(key, mat);
+  }
+  return materialCache.get(key) as THREE.MeshStandardMaterial;
+}
+
+function getAccentMaterial(theme: BoardTheme): THREE.MeshStandardMaterial {
+  const key = `accent_${theme.id}`;
+  if (!materialCache.has(key)) {
+    const mat = new THREE.MeshStandardMaterial({
+      color: getThemeAccentColor(theme),
+      roughness: 0.2,
+      metalness: 0.85,
+    });
+    materialCache.set(key, mat);
+  }
+  return materialCache.get(key) as THREE.MeshStandardMaterial;
+}
+
+function getFeltMaterial(theme: BoardTheme): THREE.MeshBasicMaterial {
+  const key = `felt_${theme.id}`;
+  if (!materialCache.has(key)) {
+    const mat = new THREE.MeshBasicMaterial({ color: theme.feltColor });
+    materialCache.set(key, mat);
+  }
+  return materialCache.get(key) as THREE.MeshBasicMaterial;
+}
+
 // Factory for high-detail tournament Staunton pieces
 export function createPieceMesh(
   type: PieceSymbol,
@@ -129,24 +230,16 @@ export function createPieceMesh(
   theme: BoardTheme
 ): THREE.Group {
   const group = new THREE.Group();
-  const pieceColor = color === 'w' ? theme.lightPiece : theme.darkPiece;
 
-  const mainMaterial = new THREE.MeshStandardMaterial({
-    color: pieceColor,
-    roughness: theme.pieceRoughness,
-    metalness: theme.pieceMetalness,
-  });
-
-  const accentMaterial = new THREE.MeshStandardMaterial({
-    color: getThemeAccentColor(theme),
-    roughness: 0.2,
-    metalness: 0.85,
-  });
+  const mainMaterial = getMainMaterial(theme, color);
+  const accentMaterial = getAccentMaterial(theme);
+  const feltMat = getFeltMaterial(theme);
 
   // Base felt bottom
   const baseFeltRadius = type === 'k' ? 0.7 : type === 'q' ? 0.66 : 0.62;
-  const feltGeo = new THREE.CircleGeometry(baseFeltRadius, 32);
-  const feltMat = new THREE.MeshBasicMaterial({ color: theme.feltColor });
+  const feltGeo = getOrCreateGeometry(`felt_geo_${baseFeltRadius}`, () =>
+    new THREE.CircleGeometry(baseFeltRadius, 32)
+  );
   const felt = new THREE.Mesh(feltGeo, feltMat);
   felt.rotation.x = -Math.PI / 2;
   felt.position.y = 0.005;
@@ -187,14 +280,14 @@ export function createPieceMesh(
         [0, 1.78],
       ];
 
-      const pawnMesh = createLatheMesh(pawnProfile, mainMaterial, 36);
+      const pawnMesh = createLatheMesh('pawn_profile', pawnProfile, mainMaterial, 36);
       group.add(pawnMesh);
 
       // Subtle gold accent ring on the collar
-      const collarRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.33, 0.02, 16, 32),
-        accentMaterial
+      const collarRingGeo = getOrCreateGeometry('pawn_collar_ring', () =>
+        new THREE.TorusGeometry(0.33, 0.02, 16, 32)
       );
+      const collarRing = new THREE.Mesh(collarRingGeo, accentMaterial);
       collarRing.rotation.x = Math.PI / 2;
       collarRing.position.y = 1.09;
       collarRing.castShadow = true;
@@ -227,17 +320,19 @@ export function createPieceMesh(
         [0, 1.40],
       ];
 
-      const rookBody = createLatheMesh(rookProfile, mainMaterial, 36);
+      const rookBody = createLatheMesh('rook_profile', rookProfile, mainMaterial, 36);
       group.add(rookBody);
 
       // 4 Castle Crenellations (Merlons) with beveled chamfers
       const merlonCount = 4;
       const merlonRadius = 0.49;
       const merlonHeight = 0.36;
+      const merlonGeo = getOrCreateGeometry('rook_merlon', () =>
+        new THREE.BoxGeometry(0.24, merlonHeight, 0.14)
+      );
 
       for (let i = 0; i < merlonCount; i++) {
         const angle = (i * Math.PI) / 2 + Math.PI / 4;
-        const merlonGeo = new THREE.BoxGeometry(0.24, merlonHeight, 0.14);
         const merlon = new THREE.Mesh(merlonGeo, mainMaterial);
         merlon.position.set(
           Math.cos(angle) * merlonRadius,
@@ -251,19 +346,19 @@ export function createPieceMesh(
       }
 
       // Parapet rim band
-      const rimBand = new THREE.Mesh(
-        new THREE.TorusGeometry(0.55, 0.025, 16, 36),
-        accentMaterial
+      const rimBandGeo = getOrCreateGeometry('rook_rim_band', () =>
+        new THREE.TorusGeometry(0.55, 0.025, 16, 36)
       );
+      const rimBand = new THREE.Mesh(rimBandGeo, accentMaterial);
       rimBand.rotation.x = Math.PI / 2;
       rimBand.position.y = 1.42;
       group.add(rimBand);
 
       // Lookout turret center dome
-      const innerCore = new THREE.Mesh(
-        new THREE.SphereGeometry(0.16, 16, 16),
-        mainMaterial
+      const innerCoreGeo = getOrCreateGeometry('rook_inner_core', () =>
+        new THREE.SphereGeometry(0.16, 16, 16)
       );
+      const innerCore = new THREE.Mesh(innerCoreGeo, mainMaterial);
       innerCore.position.y = 1.44;
       group.add(innerCore);
       break;
@@ -285,20 +380,26 @@ export function createPieceMesh(
         [0.38, 0.50],
         [0, 0.50],
       ];
-      const knightBase = createLatheMesh(knightBaseProfile, mainMaterial, 36);
+      const knightBase = createLatheMesh('knight_base_profile', knightBaseProfile, mainMaterial, 36);
       group.add(knightBase);
 
       // 2. Muscular Chest / Breast
-      const chestGeo = new THREE.SphereGeometry(0.44, 24, 24);
-      chestGeo.scale(0.85, 1.2, 1.05);
+      const chestGeo = getOrCreateGeometry('knight_chest', () => {
+        const geo = new THREE.SphereGeometry(0.44, 24, 24);
+        geo.scale(0.85, 1.2, 1.05);
+        return geo;
+      });
       const chest = new THREE.Mesh(chestGeo, mainMaterial);
       chest.position.set(0, 0.88, 0.06);
       chest.castShadow = true;
       group.add(chest);
 
       // 3. Arched Neck
-      const neckGeo = new THREE.CylinderGeometry(0.3, 0.42, 0.8, 20);
-      neckGeo.scale(0.8, 1.0, 1.15);
+      const neckGeo = getOrCreateGeometry('knight_neck', () => {
+        const geo = new THREE.CylinderGeometry(0.3, 0.42, 0.8, 20);
+        geo.scale(0.8, 1.0, 1.15);
+        return geo;
+      });
       const neck = new THREE.Mesh(neckGeo, mainMaterial);
       neck.position.set(0, 1.15, -0.06);
       neck.rotation.x = 0.35;
@@ -306,7 +407,9 @@ export function createPieceMesh(
       group.add(neck);
 
       // 4. Head & Brow Structure
-      const headGeo = new THREE.BoxGeometry(0.36, 0.44, 0.52);
+      const headGeo = getOrCreateGeometry('knight_head', () =>
+        new THREE.BoxGeometry(0.36, 0.44, 0.52)
+      );
       const head = new THREE.Mesh(headGeo, mainMaterial);
       head.position.set(0, 1.50, 0.12);
       head.rotation.x = -0.36;
@@ -314,8 +417,11 @@ export function createPieceMesh(
       group.add(head);
 
       // 5. Tapered Muzzle / Snout
-      const snoutGeo = new THREE.CylinderGeometry(0.18, 0.26, 0.42, 16);
-      snoutGeo.scale(0.85, 1.0, 1.1);
+      const snoutGeo = getOrCreateGeometry('knight_snout', () => {
+        const geo = new THREE.CylinderGeometry(0.18, 0.26, 0.42, 16);
+        geo.scale(0.85, 1.0, 1.1);
+        return geo;
+      });
       const snout = new THREE.Mesh(snoutGeo, mainMaterial);
       snout.position.set(0, 1.34, 0.40);
       snout.rotation.x = 0.95;
@@ -323,7 +429,9 @@ export function createPieceMesh(
       group.add(snout);
 
       // 6. Sculpted Nostrils
-      const nostrilGeo = new THREE.SphereGeometry(0.045, 12, 12);
+      const nostrilGeo = getOrCreateGeometry('knight_nostril', () =>
+        new THREE.SphereGeometry(0.045, 12, 12)
+      );
       const nostrilL = new THREE.Mesh(nostrilGeo, accentMaterial);
       nostrilL.position.set(-0.09, 1.26, 0.56);
       group.add(nostrilL);
@@ -333,8 +441,11 @@ export function createPieceMesh(
       group.add(nostrilR);
 
       // 7. Defined Jaw Mandibles
-      const jawGeo = new THREE.SphereGeometry(0.16, 16, 16);
-      jawGeo.scale(0.6, 1.0, 1.2);
+      const jawGeo = getOrCreateGeometry('knight_jaw', () => {
+        const geo = new THREE.SphereGeometry(0.16, 16, 16);
+        geo.scale(0.6, 1.0, 1.2);
+        return geo;
+      });
       const jawL = new THREE.Mesh(jawGeo, mainMaterial);
       jawL.position.set(-0.16, 1.38, 0.05);
       group.add(jawL);
@@ -344,7 +455,9 @@ export function createPieceMesh(
       group.add(jawR);
 
       // 8. Eyes & Brow Ridges
-      const eyeGeo = new THREE.SphereGeometry(0.045, 12, 12);
+      const eyeGeo = getOrCreateGeometry('knight_eye', () =>
+        new THREE.SphereGeometry(0.045, 12, 12)
+      );
       const eyeL = new THREE.Mesh(eyeGeo, accentMaterial);
       eyeL.position.set(-0.17, 1.54, 0.24);
       group.add(eyeL);
@@ -354,8 +467,11 @@ export function createPieceMesh(
       group.add(eyeR);
 
       // 9. Pointed Horse Ears with Cavity
-      const earGeo = new THREE.ConeGeometry(0.075, 0.26, 12);
-      earGeo.scale(0.85, 1.0, 1.15);
+      const earGeo = getOrCreateGeometry('knight_ear', () => {
+        const geo = new THREE.ConeGeometry(0.075, 0.26, 12);
+        geo.scale(0.85, 1.0, 1.15);
+        return geo;
+      });
 
       const earL = new THREE.Mesh(earGeo, mainMaterial);
       earL.position.set(-0.11, 1.82, -0.04);
@@ -370,8 +486,10 @@ export function createPieceMesh(
       group.add(earR);
 
       // 10. Cascading Sculpted Mane Locks (6 Tuft ridges down the spine)
+      const maneTuftGeo = getOrCreateGeometry('knight_mane_tuft', () =>
+        new THREE.BoxGeometry(0.10, 0.16, 0.16)
+      );
       for (let i = 0; i < 6; i++) {
-        const maneTuftGeo = new THREE.BoxGeometry(0.10, 0.16, 0.16);
         const maneTuft = new THREE.Mesh(maneTuftGeo, mainMaterial);
         const yPos = 1.72 - i * 0.14;
         const zPos = -0.12 - i * 0.055;
@@ -421,42 +539,51 @@ export function createPieceMesh(
         [0, 2.10],
       ];
 
-      const bishopBody = createLatheMesh(bishopProfile, mainMaterial, 36);
+      const bishopBody = createLatheMesh('bishop_profile', bishopProfile, mainMaterial, 36);
       group.add(bishopBody);
 
       // Iconic Mitre Cut / Cleft (Angled geometric slot)
-      const cleftGeo = new THREE.BoxGeometry(0.18, 0.36, 0.06);
-      const cleftMat = new THREE.MeshStandardMaterial({
-        color: color === 'w' ? 0x9ca3af : 0x0a0a0a,
-        roughness: 0.8,
-        metalness: 0.1,
-      });
+      const cleftGeo = getOrCreateGeometry('bishop_cleft', () =>
+        new THREE.BoxGeometry(0.18, 0.36, 0.06)
+      );
+      const cleftMatKey = `bishop_cleft_mat_${color}`;
+      if (!materialCache.has(cleftMatKey)) {
+        materialCache.set(
+          cleftMatKey,
+          new THREE.MeshStandardMaterial({
+            color: color === 'w' ? 0x9ca3af : 0x0a0a0a,
+            roughness: 0.8,
+            metalness: 0.1,
+          })
+        );
+      }
+      const cleftMat = materialCache.get(cleftMatKey)!;
       const cleft = new THREE.Mesh(cleftGeo, cleftMat);
       cleft.position.set(0.18, 1.76, 0);
       cleft.rotation.set(0, 0, -0.65);
       group.add(cleft);
 
       // Gold Accent Collar Band
-      const collarBand = new THREE.Mesh(
-        new THREE.TorusGeometry(0.33, 0.02, 16, 32),
-        accentMaterial
+      const collarBandGeo = getOrCreateGeometry('bishop_collar_band', () =>
+        new THREE.TorusGeometry(0.33, 0.02, 16, 32)
       );
+      const collarBand = new THREE.Mesh(collarBandGeo, accentMaterial);
       collarBand.rotation.x = Math.PI / 2;
       collarBand.position.y = 1.24;
       group.add(collarBand);
 
       // Top Apex Finial Bead (Gold/Polished Accent Sphere)
-      const finialPedestal = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.06, 0.08, 0.08, 16),
-        mainMaterial
+      const finialPedestalGeo = getOrCreateGeometry('bishop_finial_ped', () =>
+        new THREE.CylinderGeometry(0.06, 0.08, 0.08, 16)
       );
+      const finialPedestal = new THREE.Mesh(finialPedestalGeo, mainMaterial);
       finialPedestal.position.y = 2.14;
       group.add(finialPedestal);
 
-      const finialSphere = new THREE.Mesh(
-        new THREE.SphereGeometry(0.085, 16, 16),
-        accentMaterial
+      const finialSphereGeo = getOrCreateGeometry('bishop_finial_sph', () =>
+        new THREE.SphereGeometry(0.085, 16, 16)
       );
+      const finialSphere = new THREE.Mesh(finialSphereGeo, accentMaterial);
       finialSphere.position.y = 2.22;
       finialSphere.castShadow = true;
       group.add(finialSphere);
@@ -496,20 +623,20 @@ export function createPieceMesh(
         [0, 2.05],
       ];
 
-      const queenBody = createLatheMesh(queenProfile, mainMaterial, 36);
+      const queenBody = createLatheMesh('queen_profile', queenProfile, mainMaterial, 36);
       group.add(queenBody);
 
       // Coronet 8 Pearl Beads on crown tips
       const pearlCount = 8;
       const pearlRadius = 0.53;
       const pearlHeight = 1.98;
+      const pearlGeo = getOrCreateGeometry('queen_pearl', () =>
+        new THREE.SphereGeometry(0.055, 16, 16)
+      );
 
       for (let i = 0; i < pearlCount; i++) {
         const angle = (i * Math.PI * 2) / pearlCount;
-        const pearl = new THREE.Mesh(
-          new THREE.SphereGeometry(0.055, 16, 16),
-          accentMaterial
-        );
+        const pearl = new THREE.Mesh(pearlGeo, accentMaterial);
         pearl.position.set(
           Math.cos(angle) * pearlRadius,
           pearlHeight,
@@ -520,27 +647,27 @@ export function createPieceMesh(
       }
 
       // Waist gold accent band
-      const queenBand = new THREE.Mesh(
-        new THREE.TorusGeometry(0.36, 0.02, 16, 32),
-        accentMaterial
+      const queenBandGeo = getOrCreateGeometry('queen_band', () =>
+        new THREE.TorusGeometry(0.36, 0.02, 16, 32)
       );
+      const queenBand = new THREE.Mesh(queenBandGeo, accentMaterial);
       queenBand.rotation.x = Math.PI / 2;
       queenBand.position.y = 1.51;
       group.add(queenBand);
 
       // Central Royal Finial Orb & Crown Pip
-      const royalOrb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12, 16, 16),
-        accentMaterial
+      const royalOrbGeo = getOrCreateGeometry('queen_royal_orb', () =>
+        new THREE.SphereGeometry(0.12, 16, 16)
       );
+      const royalOrb = new THREE.Mesh(royalOrbGeo, accentMaterial);
       royalOrb.position.y = 2.14;
       royalOrb.castShadow = true;
       group.add(royalOrb);
 
-      const royalPip = new THREE.Mesh(
-        new THREE.ConeGeometry(0.04, 0.08, 12),
-        accentMaterial
+      const royalPipGeo = getOrCreateGeometry('queen_royal_pip', () =>
+        new THREE.ConeGeometry(0.04, 0.08, 12)
       );
+      const royalPip = new THREE.Mesh(royalPipGeo, accentMaterial);
       royalPip.position.y = 2.27;
       group.add(royalPip);
       break;
@@ -579,45 +706,49 @@ export function createPieceMesh(
         [0, 2.23],
       ];
 
-      const kingBody = createLatheMesh(kingProfile, mainMaterial, 36);
+      const kingBody = createLatheMesh('king_profile', kingProfile, mainMaterial, 36);
       group.add(kingBody);
 
       // Gold Collar Astragal Ring
-      const kingBand = new THREE.Mesh(
-        new THREE.TorusGeometry(0.41, 0.022, 16, 32),
-        accentMaterial
+      const kingBandGeo = getOrCreateGeometry('king_band', () =>
+        new THREE.TorusGeometry(0.41, 0.022, 16, 32)
       );
+      const kingBand = new THREE.Mesh(kingBandGeo, accentMaterial);
       kingBand.rotation.x = Math.PI / 2;
       kingBand.position.y = 1.64;
       group.add(kingBand);
 
       // Cross Mount Orb Base
-      const crossOrb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.10, 16, 16),
-        accentMaterial
+      const crossOrbGeo = getOrCreateGeometry('king_cross_orb', () =>
+        new THREE.SphereGeometry(0.10, 16, 16)
       );
+      const crossOrb = new THREE.Mesh(crossOrbGeo, accentMaterial);
       crossOrb.position.y = 2.29;
       crossOrb.castShadow = true;
       group.add(crossOrb);
 
       // 3D Imperial Latin Cross
-      const crossVGeo = new THREE.BoxGeometry(0.08, 0.40, 0.08);
+      const crossVGeo = getOrCreateGeometry('king_cross_v', () =>
+        new THREE.BoxGeometry(0.08, 0.40, 0.08)
+      );
       const crossV = new THREE.Mesh(crossVGeo, mainMaterial);
       crossV.position.y = 2.54;
       crossV.castShadow = true;
       group.add(crossV);
 
-      const crossHGeo = new THREE.BoxGeometry(0.28, 0.08, 0.08);
+      const crossHGeo = getOrCreateGeometry('king_cross_h', () =>
+        new THREE.BoxGeometry(0.28, 0.08, 0.08)
+      );
       const crossH = new THREE.Mesh(crossHGeo, mainMaterial);
       crossH.position.y = 2.58;
       crossH.castShadow = true;
       group.add(crossH);
 
       // Cross Center Gem / Gold Rosette
-      const crossGem = new THREE.Mesh(
-        new THREE.SphereGeometry(0.055, 12, 12),
-        accentMaterial
+      const crossGemGeo = getOrCreateGeometry('king_cross_gem', () =>
+        new THREE.SphereGeometry(0.055, 12, 12)
       );
+      const crossGem = new THREE.Mesh(crossGemGeo, accentMaterial);
       crossGem.position.set(0, 2.58, 0);
       group.add(crossGem);
       break;

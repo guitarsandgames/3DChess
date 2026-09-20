@@ -10,6 +10,8 @@ import {
   createLastMoveMarker,
   squareToWorld,
   worldToSquare,
+  disposeHierarchy,
+  clearPieceModelCache,
 } from './PieceModels';
 import { BoardTheme, CameraPreset } from '../types';
 import { soundManager } from '../utils/audio';
@@ -260,6 +262,13 @@ export const Chess3DCanvas: React.FC<Chess3DCanvasProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
+      if (boardGroupRef.current) {
+        disposeHierarchy(boardGroupRef.current);
+      }
+      piecesMapRef.current.forEach((oldObj) => {
+        disposeHierarchy(oldObj.group);
+      });
+      clearPieceModelCache();
       renderer.dispose();
     };
   }, []);
@@ -270,8 +279,10 @@ export const Chess3DCanvas: React.FC<Chess3DCanvasProps> = ({
     const currentTheme = getTheme();
     sceneRef.current.background = new THREE.Color(currentTheme.background);
 
-    // Rebuild board
+    // Rebuild board and dispose old board geometries
     sceneRef.current.remove(boardGroupRef.current);
+    disposeHierarchy(boardGroupRef.current);
+    clearPieceModelCache();
     const { boardGroup } = createBoardMesh(currentTheme);
     boardGroupRef.current = boardGroup;
     sceneRef.current.add(boardGroup);
@@ -375,6 +386,7 @@ export const Chess3DCanvas: React.FC<Chess3DCanvasProps> = ({
       // Remove captured pieces left over in piecesMapRef
       piecesMapRef.current.forEach((oldObj) => {
         scene.remove(oldObj.group);
+        disposeHierarchy(oldObj.group);
       });
 
       piecesMapRef.current = newPiecesMap;

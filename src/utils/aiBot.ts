@@ -269,20 +269,56 @@ function evaluateBoard(game: Chess): number {
   return score;
 }
 
-// MVV-LVA move ordering heuristic
+// Transposition Table Entry
+interface TTEntry {
+  depth: number;
+  score: number;
+  flag: 'exact' | 'lower' | 'upper';
+}
+
+// Bounded transposition cache (LRU-like, max 30,000 entries)
+const transpositionTable = new Map<string, TTEntry>();
+const MAX_TT_ENTRIES = 30000;
+
+export function clearTranspositionTable(): void {
+  transpositionTable.clear();
+}
+
+// MVV-LVA move ordering heuristic with center control & checks
 function scoreMove(move: Move): number {
   let moveScore = 0;
+
+  // 1. Captures prioritized by Most Valuable Victim - Least Valuable Attacker
   if (move.captured) {
     const victimVal = PIECE_VALUES[move.captured] || 100;
     const attackerVal = PIECE_VALUES[move.piece] || 100;
-    moveScore += 1000 + (victimVal * 10 - attackerVal);
+    moveScore += 10000 + (victimVal * 10 - attackerVal);
   }
+
+  // 2. Queen promotion is critical
   if (move.promotion) {
-    moveScore += 900;
+    moveScore += move.promotion === 'q' ? 9000 : 3000;
   }
-  if (move.san.includes('+') || move.san.includes('#')) {
-    moveScore += 200;
+
+  // 3. Checks and Mate threats
+  if (move.san.includes('#')) {
+    moveScore += 20000;
+  } else if (move.san.includes('+')) {
+    moveScore += 2500;
   }
+
+  // 4. Center square occupation (d4, d5, e4, e5)
+  if (['d4', 'd5', 'e4', 'e5'].includes(move.to)) {
+    moveScore += 50;
+  } else if (['c4', 'c5', 'f4', 'f5'].includes(move.to)) {
+    moveScore += 25;
+  }
+
+  // 5. Castling bonus
+  if (move.flags.includes('k') || move.flags.includes('q')) {
+    moveScore += 150;
+  }
+
   return moveScore;
 }
 
@@ -351,6 +387,24 @@ function minimax(
   isMaximizing: boolean,
   useQuiescence: boolean
 ): number {
+  const origAlpha = alpha;
+  const fenKey = game.fen();
+
+  // Transposition Table lookup
+  const ttEntry = transpositionTable.get(fenKey);
+  if (ttEntry && ttEntry.depth >= depth) {
+    if (ttEntry.flag === 'exact') {
+      return ttEntry.score;
+    } else if (ttEntry.flag === 'lower') {
+      alpha = Math.max(alpha, ttEntry.score);
+    } else if (ttEntry.flag === 'upper') {
+      beta = Math.min(beta, ttEntry.score);
+    }
+    if (alpha >= beta) {
+      return ttEntry.score;
+    }
+  }
+
   if (depth === 0 || game.isGameOver()) {
     if (game.isCheckmate()) {
       return isMaximizing ? -99999 + (5 - depth) : 99999 - (5 - depth);
@@ -366,6 +420,8 @@ function minimax(
 
   const rawMoves = game.moves({ verbose: true });
   const moves = orderMoves(rawMoves);
+
+  let bestEval: number;
 
   if (isMaximizing) {
     let maxEval = -Infinity;
@@ -384,7 +440,7 @@ function minimax(
       alpha = Math.max(alpha, evalVal);
       if (beta <= alpha) break;
     }
-    return maxEval;
+    bestEval = maxEval;
   } else {
     let minEval = Infinity;
     for (const move of moves) {
@@ -402,8 +458,28 @@ function minimax(
       beta = Math.min(beta, evalVal);
       if (beta <= alpha) break;
     }
-    return minEval;
+    bestEval = minEval;
   }
+
+  // Store entry into Transposition Table with bounded capacity
+  if (transpositionTable.size >= MAX_TT_ENTRIES) {
+    // Evict oldest entries
+    const keys = transpositionTable.keys();
+    for (let i = 0; i < 2000; i++) {
+      const nextKey = keys.next().value;
+      if (nextKey) transpositionTable.delete(nextKey);
+    }
+  }
+
+  let flag: 'exact' | 'lower' | 'upper' = 'exact';
+  if (bestEval <= origAlpha) {
+    flag = 'upper';
+  } else if (bestEval >= beta) {
+    flag = 'lower';
+  }
+  transpositionTable.set(fenKey, { depth, score: bestEval, flag });
+
+  return bestEval;
 }
 
 export function getBestMove(
